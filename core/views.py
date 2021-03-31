@@ -71,31 +71,71 @@ class CheckoutView(View):
             messages.info(self.request, "You do not have an active order")
             return redirect("core:checkout")
 
+    def post(self, *args, **kwargs):
+        form = CheckoutForm(self.request.POST or None)
+        try:
+            order = Order.objects.get(user=self.request.user, ordered=False)
+
+            if form.is_valid():
+                apartment_address = form.cleaned_data.get('billing_address2')
+                street_address = form.cleaned_data.get('billing_address')
+                payment_option = form.cleaned_data.get('payment_option')
+                country = form.cleaned_data.get('billing_country')
+                zip_code = form.cleaned_data.get('billing_zip')
+                billing_address = Address(
+                    user=self.request.user,
+                    street_address=street_address,
+                    apartment_address=apartment_address,
+                    country=country,
+                    zip=zip_code,
+                )
+                billing_address.save()
+                order.billing_address = billing_address
+                order.save()
+
+                if payment_option == 'S':
+                    return redirect('core:payment', payment_option='stripe')
+                elif payment_option == 'P':
+                    return redirect('core:payment', payment_option='paypal')
+                else:
+                    message = "Invalid payment option selected"
+                    messages.warning(self.request, message)
+                    return redirect('core:checkout')
+
+        except ObjectDoesNotExist:
+            messages.error(self.request, "You do not have an active order.")
+            return redirect("core:order-summary")
 
 class PaymentView(View):
     def get(self, *args, **kwargs):
         order = Order.objects.get(user=self.request.user, ordered=False)
         if order.billing_address:
-            context = {
-                'order': order,
-                'DISPLAY_COUPON_FORM': False,
-                'STRIPE_PUBLIC_KEY' : settings.STRIPE_PUBLIC_KEY
-            }
-            userprofile = self.request.user.userprofile
-            if userprofile.one_click_purchasing:
-                # fetch the users card list
-                cards = stripe.Customer.list_sources(
-                    userprofile.stripe_customer_id,
-                    limit=3,
-                    object='card'
-                )
-                card_list = cards['data']
-                if len(card_list) > 0:
-                    # update the context with the default card
-                    context.update({
-                        'card': card_list[0]
-                    })
-            return render(self.request, "payment.html", context)
+            try:
+                context = {
+                    'order': order,
+                    'DISPLAY_COUPON_FORM': False,
+                    'STRIPE_PUBLIC_KEY' : settings.STRIPE_PUBLIC_KEY
+                }
+                userprofile = self.request.user.userprofile
+                if userprofile.one_click_purchasing:
+                    # fetch the users card list
+                    cards = stripe.Customer.list_sources(
+                        userprofile.stripe_customer_id,
+                        limit=3,
+                        object='card'
+                    )
+                    card_list = cards['data']
+                    if len(card_list) > 0:
+                        # update the context with the default card
+                        context.update({
+                            'card': card_list[0]
+                        })
+                return render(self.request, "payment.html", context)
+            except stripe.error.InvalidRequestError as e:
+                # Invalid parameters were supplied to Stripe's API
+                print(e)
+                messages.warning(self.request, "Invalid parameters")
+                return redirect("/checkout")
         else:
             messages.warning(
                 self.request, "You have not added a billing address")
@@ -111,7 +151,8 @@ class PaymentView(View):
             use_default = form.cleaned_data.get('use_default')
 
             if save:
-                if userprofile.stripe_customer_id != '' and userprofile.stripe_customer_id is not None:
+                if (userprofile.stripe_customer_id != '' and
+                        userprofile.stripe_customer_id is not None):
                     customer = stripe.Customer.retrieve(
                         userprofile.stripe_customer_id)
                     customer.sources.create(source=token)
@@ -197,14 +238,15 @@ class PaymentView(View):
             except stripe.error.StripeError as e:
                 # Display a very generic error to the user, and maybe send
                 # yourself an email
-                messages.warning(
-                    self.request, "Something went wrong. You were not charged. Please try again.")
+                message = ("Something went wrong. You were not charged. "
+                           "Please try again.")
+                messages.warning(self.request, message)
                 return redirect("/")
 
             except Exception as e:
                 # send an email to ourselves
-                messages.warning(
-                    self.request, "A serious error occurred. We have been notifed.")
+                message = "A serious error occurred. We have been notifed."
+                messages.warning(self.request, message)
                 return redirect("/")
 
         messages.warning(self.request, "Invalid data received")

@@ -45,3 +45,6 @@ DATABASES = {
 
 STRIPE_PUBLIC_KEY = config('STRIPE_TEST_PUBLIC_KEY')
 STRIPE_SECRET_KEY = config('STRIPE_TEST_SECRET_KEY')
+
+# To print Email in console (No SMTP server)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
